@@ -1,9 +1,13 @@
-import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field, EmailStr
+from typing import Optional
+from database import create_document, db
+from schemas import SupplierInquiry as SupplierInquirySchema
 
-app = FastAPI()
+app = FastAPI(title="The Blacksmith Market API", version="1.0.0")
 
+# CORS - allow frontend dev server
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -12,60 +16,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
-def read_root():
-    return {"message": "Hello from FastAPI Backend!"}
-
-@app.get("/api/hello")
-def hello():
-    return {"message": "Hello from the backend API!"}
+class SupplierInquiry(BaseModel):
+    company_name: str = Field(..., min_length=2, max_length=200)
+    contact_name: str = Field(..., min_length=2, max_length=120)
+    email: EmailStr
+    phone: Optional[str] = Field(None, max_length=40)
+    website: Optional[str] = Field(None, max_length=200)
+    company_type: str = Field(..., min_length=2, max_length=120)
+    product_categories: str = Field(..., min_length=2, max_length=300)
+    estimated_monthly_volume: str = Field(..., min_length=1, max_length=100)
+    message: Optional[str] = Field(None, max_length=2000)
 
 @app.get("/test")
-def test_database():
-    """Test endpoint to check if database is available and accessible"""
-    response = {
-        "backend": "✅ Running",
-        "database": "❌ Not Available",
-        "database_url": None,
-        "database_name": None,
-        "connection_status": "Not Connected",
-        "collections": []
-    }
-    
+async def test():
     try:
-        # Try to import database module
-        from database import db
-        
-        if db is not None:
-            response["database"] = "✅ Available"
-            response["database_url"] = "✅ Configured"
-            response["database_name"] = db.name if hasattr(db, 'name') else "✅ Connected"
-            response["connection_status"] = "Connected"
-            
-            # Try to list collections to verify connectivity
-            try:
-                collections = db.list_collection_names()
-                response["collections"] = collections[:10]  # Show first 10 collections
-                response["database"] = "✅ Connected & Working"
-            except Exception as e:
-                response["database"] = f"⚠️  Connected but Error: {str(e)[:50]}"
-        else:
-            response["database"] = "⚠️  Available but not initialized"
-            
-    except ImportError:
-        response["database"] = "❌ Database module not found (run enable-database first)"
+        ok = db is not None and db.client is not None
+        return {"status": "ok", "database": "connected" if ok else "not_configured"}
     except Exception as e:
-        response["database"] = f"❌ Error: {str(e)[:50]}"
-    
-    # Check environment variables
-    import os
-    response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
-    response["database_name"] = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
-    
-    return response
+        return {"status": "ok", "database": f"error: {e}"}
 
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+@app.post("/api/supplier-inquiry")
+async def supplier_inquiry(payload: SupplierInquiry):
+    try:
+        # Validate against schema (ensures alignment with DB viewer expectations)
+        _ = SupplierInquirySchema(**payload.model_dump())
+        inserted_id = create_document("supplierinquiry", payload)
+        return {"ok": True, "id": inserted_id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
